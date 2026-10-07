@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require('dotenv').config();
+const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
@@ -8,6 +9,7 @@ const port = process.env.PORT || 3000;
 // middleware
 app.use(cors());
 app.use(express.json());
+
 
 const uri =`mongodb://${process.env.USER_DB}:${process.env.USER_PASS}@ac-ryc1yaw-shard-00-00.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-01.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-02.24tdr3m.mongodb.net:27017/?ssl=true&replicaSet=atlas-8jb3tk-shard-0&authSource=admin&appName=Cluster0`;
 
@@ -19,6 +21,8 @@ const client = new MongoClient(uri, {
   },
 });
 
+
+//
 app.get("/", (req, res) => {
   res.send("smart deal server is running");
 });
@@ -31,7 +35,7 @@ async function run() {
     const productsCollection = db.collection("products");
     const bidsCollection = db.collection("bids");
 
-    // products apis
+    // products apisssssssssssssss
     // get
     app.get("/products", async (req, res) => {
       const projectFields = {
@@ -49,7 +53,7 @@ async function run() {
       if (email) {
         query.email = email;
       }
-      // const cursor=productsCollection.find(query).sort({price_min: -1}).skip(2).limit(5).project(projectFields);
+    
       const cursor = productsCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
@@ -71,6 +75,7 @@ async function run() {
     // post
     app.post("/products", async (req, res) => {
       const newProduct = req.body;
+      newProduct.created_at = new Date();
       const result = await productsCollection.insertOne(newProduct);
       res.send(result);
     });
@@ -89,10 +94,8 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const updatedProduct = req.body;
       const update = {
-        $set: {
-          name: updatedProduct.name,
-          age: updatedProduct.age,
-        },
+        $set: updatedProduct
+        
       };
       const options = {};
       const result = await productsCollection.updateOne(query, update, options);
@@ -103,6 +106,7 @@ async function run() {
 
     // get
  app.get("/bids", async (req, res)=>{
+  console.log(req.headers);
       const email=req.query.email;
       const query={};
       if(email){
@@ -112,6 +116,7 @@ async function run() {
       const result= await cursor.toArray();
       res.send(result);
     })
+
 
     // get(productId)
     app.get("/products/bids/:productId", async (req, res)=>{
