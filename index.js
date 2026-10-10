@@ -9,9 +9,13 @@ const { cert } = require("firebase-admin/app");
 const port = process.env.PORT || 3000;
 
 
-const serviceAccount = require("./smart-deal-app-firebase-adminsdk-fbsvc-521405b3b6.json");
+// const serviceAccount = require("./smart-deal-app-firebase-adminsdk-fbsvc-521405b3b6.json");
 admin.initializeApp({
-  credential: cert(serviceAccount)
+  credential: cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  })
 });
 
 
