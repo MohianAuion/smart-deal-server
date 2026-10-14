@@ -81,6 +81,8 @@ app.get("/", (req, res) => {
   res.send("smart deal server is running");
 });
 
+module.exports = app;
+
 async function run() {
   try {
     await client.connect();
@@ -230,8 +232,6 @@ app.delete("/bids/:id", async (req, res)=>{
 }
 run().catch(console.dir);
 
-app.listen(port, () => {
-  console.log(`smart deal server port ${port}`);
-});
+
 
 
