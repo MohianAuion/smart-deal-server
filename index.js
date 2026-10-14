@@ -252,36 +252,40 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-
-const {
-  MongoClient,
-  ServerApiVersion,
-  ObjectId,
-} = require("mongodb");
-
-const { initializeApp, getApps, cert } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const admin = require("firebase-admin");
+const { cert } = require("firebase-admin/app");
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-// ==================== Firebase Admin ====================
-
-if (getApps().length === 0) {
-  initializeApp({
-    credential: cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-    }),
-  });
-}
-
-// ==================== Middleware ====================
+admin.initializeApp({
+  credential: cert({
+    projectId: process.env.FIREBASE_PROJECT_ID,
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  }),
+});
 
 app.use(cors());
 app.use(express.json());
 
-// ==================== MongoDB Connection ====================
+const verifyFireBaseToken = async (req, res, next) => {
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  const token = req.headers.authorization.split(" ")[1];
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+  try {
+    const userInfo = await admin.auth().verifyIdToken(token);
+    req.token_email = userInfo.email;
+    next();
+  } catch {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
 
 const uri = `mongodb://${process.env.USER_DB}:${process.env.USER_PASS}@ac-ryc1yaw-shard-00-00.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-01.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-02.24tdr3m.mongodb.net:27017/?ssl=true&replicaSet=atlas-8jb3tk-shard-0&authSource=admin&appName=Cluster0`;
 
@@ -293,326 +297,117 @@ const client = new MongoClient(uri, {
   },
 });
 
-const db = client.db("smart-deal-db");
-const productsCollection = db.collection("products");
-const bidsCollection = db.collection("bids");
-
-let dbConnection;
-
-function connectDB() {
-  if (!dbConnection) {
-    dbConnection = client.connect().catch((error) => {
-      dbConnection = null;
-      throw error;
-    });
+// connect once, reuse across invocations
+let dbPromise;
+function getDb() {
+  if (!dbPromise) {
+    dbPromise = client.connect().then(() => client.db("smart-deal-db"));
   }
-
-  return dbConnection;
+  return dbPromise;
 }
-
-// ==================== Firebase Token Verification ====================
-
-const verifyFireBaseToken = async (req, res, next) => {
-  const authorization = req.headers.authorization;
-
-  if (!authorization) {
-    return res.status(401).send({
-      message: "unauthorized access",
-    });
-  }
-
-  const token = authorization.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).send({
-      message: "unauthorized access",
-    });
-  }
-
-  try {
-    const userInfo = await getAuth().verifyIdToken(token);
-
-    req.token_email = userInfo.email;
-
-    next();
-  } catch (error) {
-    console.error("Firebase token verification failed:", error.message);
-
-    return res.status(401).send({
-      message: "unauthorized access",
-    });
-  }
-};
-
-// ==================== Root Route ====================
 
 app.get("/", (req, res) => {
   res.send("smart deal server is running");
 });
 
-// ==================== Database Middleware ====================
-
-// Register routes immediately, and connect to MongoDB
-// only when a database API request arrives.
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (error) {
-    console.error("MongoDB connection error:", error.message);
-
-    return res.status(500).send({
-      message: "Database connection failed",
-    });
-  }
-});
-
-// ==================== Products APIs ====================
-
-// GET all products, optionally filtered by email
+// ---------- products ----------
 app.get("/products", async (req, res) => {
-  try {
-    const query = {};
-
-    if (req.query.email) {
-      query.email = req.query.email;
-    }
-
-    const result = await productsCollection.find(query).toArray();
-
-    res.send(result);
-  } catch (error) {
-    console.error("Get products error:", error);
-
-    res.status(500).send({
-      message: "Failed to fetch products",
-    });
-  }
+  const db = await getDb();
+  const query = {};
+  if (req.query.email) query.email = req.query.email;
+  const result = await db.collection("products").find(query).toArray();
+  res.send(result);
 });
 
-// GET a single product by ID
 app.get("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({
-        message: "Invalid product ID",
-      });
-    }
-
-    const result = await productsCollection.findOne({
-      _id: new ObjectId(id),
-    });
-
-    if (!result) {
-      return res.status(404).send({
-        message: "Product not found",
-      });
-    }
-
-    res.send(result);
-  } catch (error) {
-    console.error("Get product error:", error);
-
-    res.status(500).send({
-      message: "Failed to fetch product",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("products")
+    .findOne({ _id: new ObjectId(req.params.id) });
+  res.send(result);
 });
 
-// GET latest 9 products
 app.get("/latestproducts", async (req, res) => {
-  try {
-    const result = await productsCollection
-      .find()
-      .sort({ created_at: -1 })
-      .limit(9)
-      .toArray();
-
-    res.send(result);
-  } catch (error) {
-    console.error("Get latest products error:", error);
-
-    res.status(500).send({
-      message: "Failed to fetch latest products",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("products")
+    .find()
+    .sort({ created_at: -1 })
+    .limit(9)
+    .toArray();
+  res.send(result);
 });
 
-// CREATE a product
 app.post("/products", async (req, res) => {
-  try {
-    const newProduct = {
-      ...req.body,
-      created_at: new Date(),
-    };
-
-    const result = await productsCollection.insertOne(newProduct);
-
-    res.send(result);
-  } catch (error) {
-    console.error("Create product error:", error);
-
-    res.status(500).send({
-      message: "Failed to create product",
-    });
-  }
+  const db = await getDb();
+  const newProduct = req.body;
+  newProduct.created_at = new Date();
+  const result = await db.collection("products").insertOne(newProduct);
+  res.send(result);
 });
 
-// DELETE a product
 app.delete("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({
-        message: "Invalid product ID",
-      });
-    }
-
-    const result = await productsCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
-
-    res.send(result);
-  } catch (error) {
-    console.error("Delete product error:", error);
-
-    res.status(500).send({
-      message: "Failed to delete product",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("products")
+    .deleteOne({ _id: new ObjectId(req.params.id) });
+  res.send(result);
 });
 
-// UPDATE a product
 app.patch("/products/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({
-        message: "Invalid product ID",
-      });
-    }
-
-    const result = await productsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: req.body }
-    );
-
-    res.send(result);
-  } catch (error) {
-    console.error("Update product error:", error);
-
-    res.status(500).send({
-      message: "Failed to update product",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("products")
+    .updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body });
+  res.send(result);
 });
 
-// ==================== Bids APIs ====================
-
-// GET bids, with Firebase token verification
+// ---------- bids ----------
 app.get("/bids", verifyFireBaseToken, async (req, res) => {
-  try {
-    const email = req.query.email;
-    const query = {};
-
-    if (email) {
-      if (email !== req.token_email) {
-        return res.status(403).send({
-          message: "forbidden access",
-        });
-      }
-
-      query.buyer_email = email;
+  const db = await getDb();
+  const email = req.query.email;
+  const query = {};
+  if (email) {
+    if (email !== req.token_email) {
+      return res.status(403).send({ message: "forbidden access" });
     }
-
-    const result = await bidsCollection
-      .find(query)
-      .sort({ bid_price: -1 })
-      .toArray();
-
-    res.send(result);
-  } catch (error) {
-    console.error("Get bids error:", error);
-
-    res.status(500).send({
-      message: "Failed to fetch bids",
-    });
+    query.buyer_email = email;
   }
+  const result = await db
+    .collection("bids")
+    .find(query)
+    .sort({ bid_price: -1 })
+    .toArray();
+  res.send(result);
 });
 
-// GET bids for a particular product
 app.get("/products/bids/:productId", async (req, res) => {
-  try {
-    const productId = req.params.productId;
-
-    const result = await bidsCollection
-      .find({ product: productId })
-      .sort({ bid_price: -1 })
-      .toArray();
-
-    res.send(result);
-  } catch (error) {
-    console.error("Get product bids error:", error);
-
-    res.status(500).send({
-      message: "Failed to fetch product bids",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("bids")
+    .find({ product: req.params.productId })
+    .sort({ bid_price: -1 })
+    .toArray();
+  res.send(result);
 });
 
-// CREATE a bid
 app.post("/bids", async (req, res) => {
-  try {
-    const result = await bidsCollection.insertOne(req.body);
-
-    res.send(result);
-  } catch (error) {
-    console.error("Create bid error:", error);
-
-    res.status(500).send({
-      message: "Failed to create bid",
-    });
-  }
+  const db = await getDb();
+  const result = await db.collection("bids").insertOne(req.body);
+  res.send(result);
 });
 
-// DELETE a bid
 app.delete("/bids/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({
-        message: "Invalid bid ID",
-      });
-    }
-
-    const result = await bidsCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
-
-    res.send(result);
-  } catch (error) {
-    console.error("Delete bid error:", error);
-
-    res.status(500).send({
-      message: "Failed to delete bid",
-    });
-  }
+  const db = await getDb();
+  const result = await db
+    .collection("bids")
+    .deleteOne({ _id: new ObjectId(req.params.id) });
+  res.send(result);
 });
 
-// ==================== Export Express App ====================
+// local dev only
+if (process.env.NODE_ENV !== "production") {
+  app.listen(port, () => console.log(`smart deal server port ${port}`));
+}
 
 module.exports = app;
-
-// Start server only during local development
-if (require.main === module) {
-  const port = process.env.PORT || 3000;
-
-  app.listen(port, () => {
-    console.log(`Smart Deal server running on port ${port}`);
-  });
-}
