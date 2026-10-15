@@ -270,23 +270,27 @@ admin.initializeApp({
 app.use(cors());
 app.use(express.json());
 
+// ---------- auth middleware ----------
+// NOTE: err.code is returned for debugging only.
+// Once /bids works, change it to a generic message like "unauthorized access".
 const verifyFireBaseToken = async (req, res, next) => {
-  if (!req.headers.authorization) {
-    return res.status(401).send({ message: "unauthorized access" });
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.error("No Authorization header");
+    return res.status(401).send({ message: "no authorization header" });
   }
-  const token = req.headers.authorization.split(" ")[1];
-  if (!token) {
-    return res.status(401).send({ message: "unauthorized access" });
-  }
+  const token = authHeader.split(" ")[1];
   try {
     const userInfo = await admin.auth().verifyIdToken(token);
     req.token_email = userInfo.email;
     next();
-  } catch {
-    return res.status(401).send({ message: "unauthorized access" });
+  } catch (err) {
+    console.error("verifyIdToken failed:", err.code, err.message);
+    return res.status(401).send({ message: err.code || "invalid token" });
   }
 };
 
+// ---------- MongoDB ----------
 const uri = `mongodb://${process.env.USER_DB}:${process.env.USER_PASS}@ac-ryc1yaw-shard-00-00.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-01.24tdr3m.mongodb.net:27017,ac-ryc1yaw-shard-00-02.24tdr3m.mongodb.net:27017/?ssl=true&replicaSet=atlas-8jb3tk-shard-0&authSource=admin&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
@@ -297,11 +301,17 @@ const client = new MongoClient(uri, {
   },
 });
 
-// connect once, reuse across invocations
+// connect once, reuse across invocations; reset on failure so it can retry
 let dbPromise;
 function getDb() {
   if (!dbPromise) {
-    dbPromise = client.connect().then(() => client.db("smart-deal-db"));
+    dbPromise = client
+      .connect()
+      .then(() => client.db("smart-deal-db"))
+      .catch((err) => {
+        dbPromise = null;
+        throw err;
+      });
   }
   return dbPromise;
 }
@@ -312,102 +322,159 @@ app.get("/", (req, res) => {
 
 // ---------- products ----------
 app.get("/products", async (req, res) => {
-  const db = await getDb();
-  const query = {};
-  if (req.query.email) query.email = req.query.email;
-  const result = await db.collection("products").find(query).toArray();
-  res.send(result);
+  try {
+    const db = await getDb();
+    const query = {};
+    if (req.query.email) query.email = req.query.email;
+    const result = await db.collection("products").find(query).toArray();
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.get("/products/:id", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("products")
-    .findOne({ _id: new ObjectId(req.params.id) });
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db
+      .collection("products")
+      .findOne({ _id: new ObjectId(req.params.id) });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.get("/latestproducts", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("products")
-    .find()
-    .sort({ created_at: -1 })
-    .limit(9)
-    .toArray();
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db
+      .collection("products")
+      .find()
+      .sort({ created_at: -1 })
+      .limit(9)
+      .toArray();
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.post("/products", async (req, res) => {
-  const db = await getDb();
-  const newProduct = req.body;
-  newProduct.created_at = new Date();
-  const result = await db.collection("products").insertOne(newProduct);
-  res.send(result);
+  try {
+    const db = await getDb();
+    const newProduct = req.body;
+    newProduct.created_at = new Date();
+    const result = await db.collection("products").insertOne(newProduct);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.delete("/products/:id", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("products")
-    .deleteOne({ _id: new ObjectId(req.params.id) });
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db
+      .collection("products")
+      .deleteOne({ _id: new ObjectId(req.params.id) });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.patch("/products/:id", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("products")
-    .updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body });
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db
+      .collection("products")
+      .updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 // ---------- bids ----------
 app.get("/bids", verifyFireBaseToken, async (req, res) => {
-  const db = await getDb();
-  const email = req.query.email;
-  const query = {};
-  if (email) {
-    if (email !== req.token_email) {
-      return res.status(403).send({ message: "forbidden access" });
+  try {
+    const db = await getDb();
+    const email = req.query.email;
+    const query = {};
+    if (email) {
+      if (email !== req.token_email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      query.buyer_email = email;
     }
-    query.buyer_email = email;
+    const result = await db
+      .collection("bids")
+      .find(query)
+      .sort({ bid_price: -1 })
+      .toArray();
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
   }
-  const result = await db
-    .collection("bids")
-    .find(query)
-    .sort({ bid_price: -1 })
-    .toArray();
-  res.send(result);
 });
 
 app.get("/products/bids/:productId", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("bids")
-    .find({ product: req.params.productId })
-    .sort({ bid_price: -1 })
-    .toArray();
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db
+      .collection("bids")
+      .find({ product: req.params.productId })
+      .sort({ bid_price: -1 })
+      .toArray();
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 app.post("/bids", async (req, res) => {
-  const db = await getDb();
-  const result = await db.collection("bids").insertOne(req.body);
-  res.send(result);
+  try {
+    const db = await getDb();
+    const result = await db.collection("bids").insertOne(req.body);
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
-app.delete("/bids/:id", async (req, res) => {
-  const db = await getDb();
-  const result = await db
-    .collection("bids")
-    .deleteOne({ _id: new ObjectId(req.params.id) });
-  res.send(result);
+// users can only delete their own bids (frontend must send the token)
+app.delete("/bids/:id", verifyFireBaseToken, async (req, res) => {
+  try {
+    const db = await getDb();
+    const result = await db.collection("bids").deleteOne({
+      _id: new ObjectId(req.params.id),
+      buyer_email: req.token_email,
+    });
+    res.send(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send({ message: "server error" });
+  }
 });
 
 // local dev only
 if (process.env.NODE_ENV !== "production") {
-  app.listen(port, () => console.log(`smart deal server port ${port}`));
+  const server = app.listen(port, () =>
+    console.log(`smart deal server port ${port}`),
+  );
+  server.on("error", (err) => {
+    console.error("Failed to start server:", err.code, err.message);
+  });
 }
 
 module.exports = app;
