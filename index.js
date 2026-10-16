@@ -285,9 +285,11 @@ const verifyFireBaseToken = async (req, res, next) => {
     req.token_email = userInfo.email;
     next();
   } catch (err) {
-    console.error("verifyIdToken failed:", err.code, err.message);
-    return res.status(401).send({ message: err.code || "invalid token" });
-  }
+  console.error("verifyIdToken failed:", err.code, err.message);
+  return res
+    .status(401)
+    .send({ message: err.code || "invalid token", detail: err.message });
+}
 };
 
 // ---------- MongoDB ----------
