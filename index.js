@@ -253,13 +253,13 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const admin = require("firebase-admin");
-const { cert } = require("firebase-admin/app");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-admin.initializeApp({
+initializeApp({
   credential: cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
@@ -271,25 +271,20 @@ app.use(cors());
 app.use(express.json());
 
 // ---------- auth middleware ----------
-// NOTE: err.code is returned for debugging only.
-// Once /bids works, change it to a generic message like "unauthorized access".
 const verifyFireBaseToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.error("No Authorization header");
-    return res.status(401).send({ message: "no authorization header" });
+    return res.status(401).send({ message: "unauthorized access" });
   }
   const token = authHeader.split(" ")[1];
   try {
-    const userInfo = await admin.auth().verifyIdToken(token);
+    const userInfo = await getAuth().verifyIdToken(token);
     req.token_email = userInfo.email;
     next();
   } catch (err) {
-  console.error("verifyIdToken failed:", err.code, err.message);
-  return res
-    .status(401)
-    .send({ message: err.code || "invalid token", detail: err.message });
-}
+    console.error("verifyIdToken failed:", err.code, err.message);
+    return res.status(401).send({ message: "unauthorized access" });
+  }
 };
 
 // ---------- MongoDB ----------
